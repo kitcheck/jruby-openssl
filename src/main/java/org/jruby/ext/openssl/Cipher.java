@@ -46,6 +46,7 @@ import static javax.crypto.Cipher.DECRYPT_MODE;
 import static javax.crypto.Cipher.ENCRYPT_MODE;
 import javax.crypto.NoSuchPaddingException;
 import javax.crypto.spec.IvParameterSpec;
+import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.RC2ParameterSpec;
 
 import org.jruby.Ruby;
@@ -72,6 +73,7 @@ import static org.jruby.ext.openssl.OpenSSL.*;
  */
 public class Cipher extends RubyObject {
     private static final long serialVersionUID = -5390983669951165103L;
+    private static final int GCM_AUTH_TAG_LEN = 128;
 
     private static final ObjectAllocator ALLOCATOR = new ObjectAllocator() {
         public Cipher allocate(Ruby runtime, RubyClass klass) { return new Cipher(runtime, klass); }
@@ -715,6 +717,7 @@ public class Cipher extends RubyObject {
     private byte[] realIV;
     private byte[] orgIV;
     private String padding;
+    private byte[] authTag;
 
     private void dumpVars(final PrintStream out, final String header) {
         out.println(this.toString() + ' ' + header +
@@ -1039,6 +1042,12 @@ public class Cipher extends RubyObject {
                         new SimpleSecretKey("RC4", this.key)
                     );
                 }
+                else if ( "GCM".equalsIgnoreCase(cryptoMode) ) {
+                    cipher.init(encryptMode ? ENCRYPT_MODE : DECRYPT_MODE,
+                        new SimpleSecretKey(getCipherAlgorithm(), this.key),
+                        new GCMParameterSpec(GCM_AUTH_TAG_LEN, this.realIV)
+                    );
+                }
                 else {
                     cipher.init(encryptMode ? ENCRYPT_MODE : DECRYPT_MODE,
                         new SimpleSecretKey(getCipherAlgorithm(), this.key),
@@ -1075,7 +1084,7 @@ public class Cipher extends RubyObject {
 
         checkCipherNotNull(runtime);
 
-        final byte[] data = arg.asString().getBytes();
+        byte[] data = arg.asString().getBytes();
         if ( data.length == 0 ) {
             throw runtime.newArgumentError("data must not be empty");
         }
@@ -1084,6 +1093,13 @@ public class Cipher extends RubyObject {
             //if ( debug ) runtime.getOut().println("BEFORE INITING");
             doInitCipher(runtime);
             //if ( debug ) runtime.getOut().println("AFTER INITING");
+        }
+        // reattch auth_tag if available
+        if (authTag != null && !encryptMode && "GCM".equalsIgnoreCase(cryptoMode) ) {
+            byte[] tempData = new byte[data.length + authTag.length];
+            System.arraycopy(data, 0, tempData, 0, data.length);
+            System.arraycopy(authTag, 0, tempData, data.length, authTag.length);
+            data = tempData;
         }
 
         final ByteList str;
@@ -1120,7 +1136,7 @@ public class Cipher extends RubyObject {
         // trying to allow update after final like cruby-openssl. Bad idea.
         if ( "RC4".equalsIgnoreCase(cryptoBase) ) return runtime.newString("");
 
-        final ByteList str;
+        ByteList str;
         try {
             final byte[] out = cipher.doFinal();
             if ( out != null ) {
@@ -1131,6 +1147,11 @@ public class Cipher extends RubyObject {
                 // for now. JRUBY-3335.
                 //if ( realIV != null && encryptMode ) ...
                 if ( realIV != null ) setLastIVIfNeeded(out);
+                if ( encryptMode && "GCM".equalsIgnoreCase(cryptoMode) ) {
+                    int tag_size = GCM_AUTH_TAG_LEN / Byte.SIZE;
+                    this.authTag = Arrays.copyOfRange(out, out.length - tag_size, out.length); // grab auth_tag
+                    str = new ByteList(Arrays.copyOf(out, out.length - tag_size), false); // pull auth_tag off end
+                }
             }
             else {
                 str = new ByteList(ByteList.NULL_ARRAY);
@@ -1171,6 +1192,18 @@ public class Cipher extends RubyObject {
     public IRubyObject set_padding(IRubyObject padding) {
         updateCipher(name, padding.toString());
         return padding;
+    }
+
+    @JRubyMethod(name = "auth_tag=")
+    public IRubyObject set_auth_tag(IRubyObject authTag) {
+        this.authTag = authTag.asString().getBytes();
+        return authTag;
+    }
+
+    @JRubyMethod
+    public IRubyObject auth_tag(final ThreadContext context) {
+        final Ruby runtime = context.runtime;
+        return RubyString.newString(runtime, new ByteList(this.authTag));
     }
 
     @JRubyMethod
