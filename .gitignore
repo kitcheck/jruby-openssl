@@ -1,6 +1,5 @@
 *.gemspec.xml
 pkg
-*.jar
 target
 build.log
 .idea
