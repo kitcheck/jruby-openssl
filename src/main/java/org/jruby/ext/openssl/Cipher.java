@@ -247,7 +247,7 @@ public class Cipher extends RubyObject {
         private static final Set<String> KNOWN_BLOCK_MODES;
         // NOTE: CFB1 does not work as (OpenSSL) expects with BC (@see GH-35)
         private static final String[] OPENSSL_BLOCK_MODES = {
-            "CBC", "CFB", /* "CFB1", */ "CFB8", "ECB", "OFB" // that Java supports
+            "CBC", "CFB", /* "CFB1", */ "CFB8", "ECB", "OFB", "GCM" // that Java supports
         };
 
         static {
@@ -613,7 +613,12 @@ public class Cipher extends RubyObject {
 
             if ( ivLength == -1 ) {
                 if ( "AES".equals(base) ) {
-                    ivLength = 16;
+                    if("GCM".equals(mode)){
+                        ivLength = 12;
+                    }
+                    else{
+                        ivLength = 16;
+                    }
                 }
                 //else if ( "DES".equals(base) ) {
                 //    ivLength = 8;
